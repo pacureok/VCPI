@@ -1,29 +1,36 @@
-from panda3d.core import loadPrcFileData
-# ESTO ES VITAL: Configura el renderizado por software antes de importar ShowBase
-loadPrcFileData("", "window-type offscreen")
-loadPrcFileData("", "audio-library-name null")
-loadPrcFileData("", "gl-debug #t")
-
 from direct.showbase.ShowBase import ShowBase
-from panda3d.core import Fog, LVector3
+from panda3d.core import loadPrcFileData, AntialiasAttrib
+import os
+
+# Forzar renderizado "Offscreen" (Sin ventana)
+loadPrcFileData("", "window-type offscreen")
+loadPrcFileData("", "load-display p3tinydisplay") # Motor de software alternativo
 
 class MotorVCPI(ShowBase):
     def __init__(self):
-        ShowBase.__init__(self)
-
-    def crear_escena(self, niebla_densidad=0.1):
+        super().__init__()
+        self.setBackgroundColor(0.1, 0.1, 0.1) # Fondo gris oscuro (no negro total)
+        
+    def crear_escena(self):
+        # Limpiar escena previa
         self.render.getChildren().detach()
-        model = self.loader.loadModel("models/box")
-        model.reparentTo(self.render)
-        model.setPos(0, 10, 0)
-        model.setScale(1, 1, 3)
         
-        # Niebla estilo Backrooms/Cinematic
-        fog = Fog("VCPI_Fog")
-        fog.setColor(0.1, 0.1, 0.1)
-        fog.setExpDensity(niebla_densidad)
-        self.render.setFog(fog)
+        # Crear un objeto de prueba (Caja) para verificar que no esté negro
+        box = self.loader.loadModel("models/box")
+        box.reparentTo(self.render)
+        box.setPos(0, 5, 0)
+        box.setScale(1)
+        box.setHpr(45, 45, 45)
         
+        # Luces (Indispensables para que no se vea negro)
+        from panda3d.core import AmbientLight, DirectionalLight
+        alight = AmbientLight('alight')
+        alight.setColor((0.5, 0.5, 0.5, 1))
+        alnp = self.render.attachNewNode(alight)
+        self.render.setLight(alnp)
+        
+        # Renderizar un frame y guardar
         self.graphicsEngine.renderFrame()
-        self.screenshot("render_vcpi.png", defaultFilename=False)
-        return "render_vcpi.png"
+        img_path = "render_3d.png"
+        self.screenshot(img_path, defaultFilename=False)
+        return os.path.abspath(img_path)
