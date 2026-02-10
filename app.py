@@ -5,84 +5,75 @@ import torch
 import soundfile as sf
 import numpy as np
 
-# --- INTENTO DE IMPORTACIÓN ROBUSTA ---
+# --- CARGA SEGURA DE MUSICGEN ---
 try:
     from audiocraft.models import musicgen
-    AUDIO_ENGINE = "audiocraft"
-except ImportError:
-    AUDIO_ENGINE = "none"
-    print("⚠️ MusicGen no disponible, el audio será omitido o genérico.")
+    print("✅ MusicGen cargado.")
+except Exception as e:
+    print(f"⚠️ Error cargando MusicGen: {e}")
+    musicgen = None
 
-try:
-    from motor_vcpi import MotorVCPI
-    motor = MotorVCPI()
-except ImportError:
-    motor = None
-    print("⚠️ Motor 3D no detectado.")
+from motor_vcpi import MotorVCPI 
 
 def pipeline_maestro(prompt, duracion):
-    # 1. TEXTO (Guion vía Ollama)
-    print("📝 Generando guion...")
+    # 1. GUION (Ollama con Failsafe)
     ollama_bin = os.getenv('OLLAMA_BIN', '/usr/local/bin/ollama')
+    print("📝 Generando texto...")
     try:
-        guion = subprocess.check_output([ollama_bin, "run", "llama3", f"Escribe una frase corta de 10 palabras sobre: {prompt}"], timeout=30).decode('utf-8')
+        guion = subprocess.check_output([ollama_bin, "run", "llama3", f"Crea una frase de 10 palabras sobre: {prompt}"], timeout=25).decode('utf-8')
     except:
-        guion = f"Explorando el sector: {prompt}. Anomalía detectada."
+        guion = "Iniciando protocolo Pacure Labs. El sistema evoluciona."
 
-    # 2. VOCES (Edge-TTS)
-    print("🎙️ Generando voz...")
-    voz_path = "narracion.mp3"
-    subprocess.run(["edge-tts", "--text", guion, "--write-media", voz_path, "--voice", "es-MX-DaliaNeural"])
+    # 2. VOZ (Edge-TTS)
+    print("🎙️ Generando voces...")
+    voz_path = "voz.mp3"
+    os.system(f'edge-tts --text "{guion}" --write-media {voz_path} --voice es-MX-DaliaNeural')
 
-    # 3. MÚSICA (MusicGen)
-    print("🎵 Generando música...")
-    musica_path = "ambiente.wav"
-    if AUDIO_ENGINE == "audiocraft":
-        try:
+    # 3. MÚSICA (MusicGen con manejo de errores)
+    print("🎵 Generando banda sonora...")
+    musica_path = "musica.wav"
+    try:
+        if musicgen:
             model = musicgen.MusicGen.get_pretrained('facebook/musicgen-small')
             model.set_generation_params(duration=int(duracion))
-            res = model.generate([f"Dark ambient, cinematic, {prompt}"])
-            audio_data = res[0, 0].cpu().numpy()
-            sf.write(musica_path, audio_data, 32000)
-        except:
-            # Generar silencio si falla para no romper el video
-            sf.write(musica_path, np.zeros(32000 * int(duracion)), 32000)
-    else:
+            res = model.generate([f"Futuristic cyberpunk, {prompt}"])
+            sf.write(musica_path, res[0, 0].cpu().numpy(), 32000)
+        else:
+            raise Exception("No engine")
+    except:
         sf.write(musica_path, np.zeros(32000 * int(duracion)), 32000)
 
-    # 4. VIDEO (Render 3D)
-    print("🎥 Generando imagen 3D...")
-    if motor:
+    # 4. RENDER 3D
+    print("🎥 Capturando render 3D...")
+    try:
+        motor = MotorVCPI()
         img_path = motor.crear_escena()
-    else:
-        img_path = "fallback.png" # Asegúrate de tener una imagen base o generarla
+    except:
+        img_path = "fallback.png"
 
-    # 5. ENSAMBLAJE FINAL (FFMPEG)
-    print("🎬 Ensamblando video final...")
-    video_final = "VCPI_Resultado.mp4"
-    # Une imagen + música + voz
+    # 5. ENSAMBLAJE (FFMPEG)
+    video_out = "VCPI_Final.mp4"
     ffmpeg_cmd = (
         f'ffmpeg -loop 1 -i {img_path} -i {musica_path} -i {voz_path} '
         f'-filter_complex "[1:a][2:a]amix=inputs=2:duration=first" '
-        f'-c:v libx264 -t {duracion} -pix_fmt yuv420p {video_final} -y'
+        f'-c:v libx264 -t {duracion} -pix_fmt yuv420p {video_out} -y'
     )
     subprocess.run(ffmpeg_cmd, shell=True)
 
-    return guion, video_final, musica_path
+    return guion, video_out, musica_path
 
-# --- INTERFAZ ---
-with gr.Blocks(theme=gr.themes.Monochrome()) as demo:
-    gr.Markdown("# 🌌 VCPI: Generador de Cine IA")
+# --- UI ---
+with gr.Blocks() as demo:
+    gr.Markdown("# 🌌 VCPI Pacure Labs v3.0")
     with gr.Row():
         with gr.Column():
-            idea = gr.Textbox(label="Idea de la escena")
-            seg = gr.Slider(5, 60, value=15, label="Duración")
-            btn = gr.Button("🚀 GENERAR TODO", variant="primary")
+            idea = gr.Textbox(label="Instrucción creativa")
+            tiempo = gr.Slider(5, 60, value=15, label="Duración del clip")
+            btn = gr.Button("GENERAR TODO", variant="primary")
         with gr.Column():
-            res_txt = gr.Textbox(label="Guion (Ollama)")
-            res_vid = gr.Video(label="Video Final (3D + Voces + Música)")
-            res_aud = gr.Audio(label="Banda Sonora")
+            res_v = gr.Video(label="Video Multimodal")
+            res_t = gr.Textbox(label="Guion IA")
 
-    btn.click(pipeline_maestro, [idea, seg], [res_txt, res_vid, res_aud])
+    btn.click(pipeline_maestro, [idea, tiempo], [res_t, res_v])
 
 demo.launch(share=True)
