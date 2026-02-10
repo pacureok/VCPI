@@ -1,105 +1,78 @@
 import gradio as gr
 import os, subprocess, time, torch
 from diffusers import StableVideoDiffusionPipeline, AutoPipelineForText2Image
-from PIL import Image
 
 # 1. Configuración de Hardware
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-# 2. Carga de Modelos Generativos
-print("⏳ Cargando motores de IA (esto puede tardar un poco en la primera ejecución)...")
-
-# Motor de Imagen: SDXL Turbo (Para rostros y escenarios ultra-detallados)
+# 2. Carga de Modelos
+print("🎨 Cargando Generador de Imágenes (SDXL)...")
 pipe_img = AutoPipelineForText2Image.from_pretrained(
-    "stabilityai/sdxl-turbo", 
-    torch_dtype=torch.float16, 
-    variant="fp16"
+    "stabilityai/sdxl-turbo", torch_dtype=torch.float16, variant="fp16"
 ).to(device)
 
-# Motor de Video: SVD XT (Para movimiento fluido nivel Sora)
+print("🎬 Cargando Generador de Video (SVD)...")
 pipe_vid = StableVideoDiffusionPipeline.from_pretrained(
-    "stabilityai/stable-video-diffusion-img2vid-xt", 
-    torch_dtype=torch.float16, 
-    variant="fp16"
+    "stabilityai/stable-video-diffusion-img2vid-xt", torch_dtype=torch.float16, variant="fp16"
 ).to(device)
 
-# --- OPTIMIZACIONES ANTI-CRASH (MEMORIA T4) ---
+# --- OPTIMIZACIONES DE MEMORIA (Solución al NotImplementedError) ---
 pipe_vid.enable_model_cpu_offload()
-pipe_vid.unet.enable_forward_chunking(chunk_size=1, dim=1)
 
-# Parche para el error de 'AutoencoderKLTemporalDecoder'
-if hasattr(pipe_vid.vae, 'enable_tiling'):
-    pipe_vid.vae.enable_tiling()
-else:
-    pipe_vid.vae.enable_slicing() 
+# Intentamos slicing, que es compatible con el decodificador temporal
+try:
+    pipe_vid.vae.enable_slicing()
+    pipe_vid.unet.enable_forward_chunking(chunk_size=1, dim=1)
+    print("✅ Optimizaciones de memoria activadas.")
+except Exception as e:
+    print(f"⚠️ Aviso: Algunas optimizaciones no se aplicaron: {e}")
 
-def pipeline_maestro(prompt_usuario):
+def pipeline_vcpi(prompt_usuario):
     base_dir = os.getcwd()
-    video_out = os.path.join(base_dir, "VCPI_Final_AI.mp4")
+    video_out = os.path.join(base_dir, "VCPI_Final.mp4")
     
-    # 1. DIRECTOR IA (Ollama): Autonomía creativa
+    # 1. Autonomía con Ollama
     try:
-        # Pedimos a Llama 3 que actúe como director técnico de fotografía
-        instruccion = f"Transforma este concepto en un prompt cinematográfico de 20 palabras para video (en inglés): '{prompt_usuario}'. Incluye detalles de luz, texturas y atmósfera."
-        prompt_ai = subprocess.check_output(["ollama", "run", "llama3", instruccion], timeout=30).decode('utf-8').strip()
+        query = f"Act as a film director. Create a high-end cinematic prompt for: {prompt_usuario}. 20 words max."
+        prompt_ai = subprocess.check_output(["ollama", "run", "llama3", query], timeout=30).decode('utf-8').strip()
     except:
-        prompt_ai = f"Cinematic close-up of {prompt_usuario}, high detail, 8k, realistic textures."
+        prompt_ai = f"Cinematic shot of {prompt_usuario}, 8k, realistic."
 
-    # 2. GENERACIÓN DE IMAGEN (SDXL)
-    print(f"🎨 Creando imagen base: {prompt_ai[:50]}...")
+    # 2. Imagen Maestra
     image = pipe_img(prompt=prompt_ai, num_inference_steps=2, guidance_scale=0.0).images[0]
     image = image.resize((512, 512))
-    img_path = os.path.join(base_dir, "frame_maestro.png")
-    image.save(img_path)
+    image.save("base.png")
 
-    # 3. GENERACIÓN DE VIDEO (SVD)
-    print("🎬 Animando escena (Nivel Sora)...")
-    try:
-        # Generamos 14 frames para máxima estabilidad en Kaggle
-        frames = pipe_vid(
-            image, 
-            decode_chunk_size=2, 
-            motion_bucket_id=127, 
-            num_frames=14, 
-            fps=7
-        ).frames[0]
-        
-        # Carpeta temporal para frames
-        temp_frames = os.path.join(base_dir, "temp_frames")
-        os.makedirs(temp_frames, exist_ok=True)
-        for i, frame in enumerate(frames):
-            frame.save(f"{temp_frames}/{i:03d}.png")
-            
-    except Exception as e:
-        return f"Error en animación: {e}", None
+    # 3. Animación (14 frames para estabilidad)
+    frames = pipe_vid(image, decode_chunk_size=2, num_frames=14, motion_bucket_id=127).frames[0]
+    
+    frame_dir = "temp_frames"
+    os.makedirs(frame_dir, exist_ok=True)
+    for i, frame in enumerate(frames):
+        frame.save(f"{frame_dir}/{i:03d}.png")
 
-    # 4. LOCUCIÓN (Edge-TTS)
-    voz_path = os.path.join(base_dir, "voz.mp3")
+    # 4. Voz
+    voz_path = "voz.mp3"
     subprocess.run(["edge-tts", "--text", prompt_ai[:150], "--write-media", voz_path, "--voice", "es-MX-DaliaNeural"])
 
-    # 5. ENSAMBLAJE FINAL (FFMPEG)
-    print("🎥 Ensamblando video final...")
+    # 5. FFMPEG
     subprocess.run(
-        f"ffmpeg -framerate 7 -i {temp_frames}/%03d.png -i {voz_path} -c:v libx264 -pix_fmt yuv420p -shortest {video_out} -y",
-        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        f"ffmpeg -framerate 7 -i {frame_dir}/%03d.png -i {voz_path} -c:v libx264 -pix_fmt yuv420p -shortest {video_out} -y",
+        shell=True, capture_output=True
     )
-
+    
     return prompt_ai, video_out
 
-# --- INTERFAZ GRADIO ---
-with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue")) as demo:
-    gr.Markdown("# 🌌 VCPI - Sistema de Video Autónomo IA")
-    gr.Markdown("Generación de rostros, escenarios y entornos fotorrealistas.")
-    
+# Interfaz
+with gr.Blocks(theme=gr.themes.Monochrome()) as demo:
+    gr.Markdown("# 🌌 VCPI v6.0 - High End AI Video")
     with gr.Row():
-        with gr.Column():
-            input_text = gr.Textbox(label="Describe tu visión", placeholder="Ej: Rostro de una mujer cyborg bajo la lluvia neón")
-            btn = gr.Button("🚀 GENERAR PRODUCCIÓN", variant="primary")
-        with gr.Column():
-            output_text = gr.Textbox(label="Prompt Técnico Generado")
-            output_video = gr.Video(label="Video Producido")
+        in_t = gr.Textbox(label="Tu visión (Rostros, escenarios, etc.)")
+        btn = gr.Button("GENERAR PRODUCCIÓN", variant="primary")
+    with gr.Row():
+        out_p = gr.Textbox(label="Prompt del Director")
+        out_v = gr.Video(label="Video Final")
+    
+    btn.click(pipeline_vcpi, inputs=[in_t], outputs=[out_p, out_v])
 
-    btn.click(pipeline_maestro, inputs=[input_text], outputs=[output_text, output_video])
-
-if __name__ == "__main__":
-    demo.launch(share=True)
+demo.launch(share=True)
