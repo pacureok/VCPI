@@ -1,5 +1,5 @@
 Licencia de Uso Propietario: VCPI & Pacure Labs
-Versión 1.0 - 2026
+Versión v10+ - 2026
 
 Por la presente, se establece que el software (código fuente), los pesos del modelo y los activos digitales contenidos en este repositorio son propiedad exclusiva de Pacure Labs. El uso de este material está sujeto a las siguientes restricciones:
 
