@@ -1,36 +1,48 @@
-execute in kaggle 
---------------------------------------------------------------------------
+Licencia de Uso Propietario: VCPI & Pacure Labs
+Versión 1.0 - 2026
+
+Por la presente, se establece que el software (código fuente), los pesos del modelo y los activos digitales contenidos en este repositorio son propiedad exclusiva de Pacure Labs. El uso de este material está sujeto a las siguientes restricciones:
+
+🚫 Restricciones Estrictas
+Prohibición de Modificación: No se permite la alteración, edición, transformación o creación de obras derivadas del código fuente o de la arquitectura del modelo.
+
+Prohibición de Distribución: No se permite la redistribución, sublicenciamiento, alquiler o préstamo del código o del modelo a terceros, ya sea de forma gratuita o comercial.
+
+Prohibición de Ingeniería Inversa: No se permite descompilar o intentar extraer la lógica interna del modelo para crear versiones alternativas.
+
+✅ Derechos de Comercialización
+Venta del Producto Final: Se autoriza al usuario a vender los archivos generados por el software (ej. videos .mp4, imágenes o resultados procesados).
+
+Atribución Obligatoria: Para cualquier uso comercial o exhibición pública del producto generado, es requisito indispensable incluir de forma visible el siguiente crédito:
+
+"Generado con motor VCPI por Pacure Labs"
+
+⚖️ Incumplimiento
+Cualquier violación a estos términos resultará en la revocación inmediata de la licencia de uso y dará lugar a las acciones legales correspondientes bajo las leyes de propiedad intelectual internacionales
+------------------------------------------------
+ejuctar en kaggle
 ```bash
-# 1. Instalación de dependencias de sistema
-!apt-get update && apt-get install -y ffmpeg zstd libosmesa6-dev
+import os, torch, subprocess, shutil
 
-# 2. Instalación de librerías de Python (Orden corregido para evitar errores de 'av')
-!pip install --only-binary=:all: av==12.3.0
-!pip install panda3d edge-tts gradio soundfile xformers==0.0.23.post1
+# 1. Limpieza total
+os.chdir('/kaggle/working')
+if os.path.exists('VCPI'): shutil.rmtree('VCPI')
+!rm -rf frames_temp produccion_final.mp4
+torch.cuda.empty_cache()
 
-# 3. Instalación de Audiocraft (Modo Seguro)
-!pip install --no-deps git+https://github.com/facebookresearch/audiocraft
-!pip install flashy>=0.0.1 hydra-core>=1.1 julius num2words omegaconf pesq pystoi torchdiffeq torchmetrics
+# 2. Instalación con versiones fijas (Evita el error de transformers 5.1.0)
+print("📦 Instalando versiones de máxima compatibilidad...")
+!pip install -qU "transformers>=4.41.0,<4.45.0" "diffusers>=0.30.0" "accelerate>=0.33.0"
+!pip install -qU bitsandbytes gradio
 
-# 4. Instalación y arranque de Ollama
-!curl -fsSL https://ollama.com/install.sh | sh
-import subprocess
-import time
-import os
-
-OLLAMA_PATH = "/usr/local/bin/ollama"
-subprocess.Popen([OLLAMA_PATH, "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-time.sleep(10)
-!{OLLAMA_PATH} pull llama3
-
-# 5. Clonar repositorio
-if os.path.exists('/kaggle/working/VCPI'):
-    import shutil
-    shutil.rmtree('/kaggle/working/VCPI')
-%cd /kaggle/working/
+# 3. Clonar repositorio
 !git clone https://github.com/pacureok/VCPI.git
-%cd VCPI
+os.chdir('VCPI')
 
-# 6. Lanzamiento
-os.environ['OLLAMA_BIN'] = OLLAMA_PATH
+# 4. Configuración Multi-GPU
+os.environ['CUDA_VISIBLE_DEVICES'] = "0,1"
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:32'
+
+# 5. Ejecutar
+print("🚀 Lanzando VCPI (MP4 Directo)...")
 !python app.py
