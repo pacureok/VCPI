@@ -1,57 +1,64 @@
 import gradio as gr
-import os, subprocess, time
-from motor_vcpi import MotorVCPI
+import os, subprocess, torch
+import torch
+from diffusers import StableVideoDiffusionPipeline, StableDiffusionPipeline
+from PIL import Image
+import time
 
-def pipeline_maestro(prompt, duracion):
+# Configuración de Modelos (Nivel Sora/Veo)
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# Cargamos el generador de imágenes (SDXL o SD 1.5)
+pipe_img = StableDiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5", torch_dtype=torch.float16).to(device)
+
+# Cargamos el generador de video (Stable Video Diffusion)
+pipe_vid = StableVideoDiffusionPipeline.from_pretrained(
+    "compatibility/stable-video-diffusion-img2vid", torch_dtype=torch.float16, variant="fp16"
+).to(device)
+
+def pipeline_pro(prompt, duracion):
     base_dir = os.getcwd()
-    video_out = os.path.join(base_dir, "VCPI_Final.mp4")
+    video_out = os.path.join(base_dir, "IA_Video_Cinematic.mp4")
     
-    # 1. Ollama genera el guion
-    ollama_bin = os.getenv('OLLAMA_BIN', '/usr/local/bin/ollama')
-    try:
-        guion = subprocess.check_output([ollama_bin, "run", "llama3", f"Escribe una frase de 10 palabras sobre: {prompt}"], timeout=30).decode('utf-8').strip()
-    except:
-        guion = f"Visualizando entorno: {prompt}"
+    # 1. Ollama: Guion y Prompt Mejorado
+    ollama_bin = os.getenv('OLLAMA_BIN', 'ollama')
+    guion = subprocess.check_output([ollama_bin, "run", "llama3", f"Escribe un prompt descriptivo para una IA de video sobre: {prompt}. Sé muy visual."], timeout=30).decode('utf-8')
 
-    # 2. Voz (TTS)
+    # 2. Generación de Imagen Base (La "foto" inicial)
+    print("🎨 Generando imagen base realista...")
+    image = pipe_img(prompt + ", photorealistic, 8k, highly detailed, cinematic lighting").images[0]
+    image = image.resize((512, 512))
+    
+    # 3. Generación de Video (Darle vida a la imagen)
+    print("🎬 Generando movimiento nivel Veo...")
+    frames = pipe_vid(image, decode_chunk_size=8).frames[0]
+    
+    # Guardar frames como video usando ffmpeg
+    temp_folder = "temp_frames"
+    os.makedirs(temp_folder, exist_ok=True)
+    for i, frame in enumerate(frames):
+        frame.save(f"{temp_folder}/frame_{i:04d}.png")
+
+    # 4. Voz (TTS)
     voz_path = os.path.join(base_dir, "voz.mp3")
-    subprocess.run(["edge-tts", "--text", guion, "--write-media", voz_path, "--voice", "es-MX-DaliaNeural"])
+    subprocess.run(["edge-tts", "--text", guion[:100], "--write-media", voz_path, "--voice", "es-MX-DaliaNeural"])
 
-    # 3. Renderizado 3D con ESTILO
-    try:
-        motor = MotorVCPI()
-        # Le pasamos el prompt al motor para que decida colores
-        img_render = motor.crear_escena(estilo=prompt.lower())
-    except Exception as e:
-        print(f"Error 3D: {e}")
-        img_render = "render_final.png"
-
-    # 4. Música de fondo (silencio rápido por ahora)
-    musica_path = os.path.join(base_dir, "musica.wav")
-    os.system(f'ffmpeg -f lavfi -i anullsrc=r=32000:cl=mono -t {duracion} {musica_path} -y')
-
-    # 5. Ensamblaje FFMPEG
-    time.sleep(1)
-    cmd = (
-        f'ffmpeg -loop 1 -i "{img_render}" -i "{musica_path}" -i "{voz_path}" '
-        f'-filter_complex "[1:a][2:a]amix=inputs=2:duration=first" '
-        f'-c:v libx264 -t {duracion} -pix_fmt yuv420p "{video_out}" -y'
-    )
-    subprocess.run(cmd, shell=True)
+    # 5. Ensamblaje Final con Audio
+    subprocess.run(f"ffmpeg -framerate 7 -i {temp_folder}/frame_%04d.png -i {voz_path} -c:v libx264 -pix_fmt yuv420p -shortest {video_out} -y", shell=True)
 
     return guion, video_out
 
 # Interfaz Gradio
-with gr.Blocks() as demo:
-    gr.Markdown("# 🌌 VCPI - Generador de Entornos 3D")
+with gr.Blocks(theme=gr.themes.Soft()) as demo:
+    gr.Markdown("# 🌌 VCPI Pro: Sora-Level Video Gen")
     with gr.Row():
         with gr.Column():
-            idea = gr.Textbox(label="Describe el entorno (ej: Cyberpunk Lab, Deep Sea, Mars)")
-            btn = gr.Button("GENERAR MUNDO 3D")
+            idea = gr.Textbox(label="Instrucción Visual")
+            btn = gr.Button("GENERAR VIDEO IA", variant="primary")
         with gr.Column():
             out_v = gr.Video()
-            out_t = gr.Textbox(label="Relato de la IA")
+            out_t = gr.Textbox(label="Descripción de la Escena")
 
-    btn.click(pipeline_maestro, [idea, gr.State(10)], [out_t, out_v])
+    btn.click(pipeline_pro, [idea, gr.State(10)], [out_t, out_v])
 
 demo.launch(share=True)
