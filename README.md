@@ -23,7 +23,7 @@ subprocess.Popen([OLLAMA_PATH, "serve"], stdout=subprocess.DEVNULL, stderr=subpr
 time.sleep(10)
 !{OLLAMA_PATH} pull llama3
 
-# 5. Clonar tu repositorio
+# 5. Clonar repositorio
 if os.path.exists('/kaggle/working/VCPI'):
     import shutil
     shutil.rmtree('/kaggle/working/VCPI')
