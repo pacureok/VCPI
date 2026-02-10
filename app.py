@@ -1,55 +1,38 @@
 import gradio as gr
-import os, subprocess, time, torch
+import os, subprocess, time, torch, shutil
 from diffusers import StableVideoDiffusionPipeline, AutoPipelineForText2Image
 
-# Configuración de Hardware
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Carga de Modelos
-print("🎨 Cargando SDXL Turbo...")
-pipe_img = AutoPipelineForText2Image.from_pretrained(
-    "stabilityai/sdxl-turbo", torch_dtype=torch.float16, variant="fp16"
-).to(device)
+# Modelos con carga optimizada
+pipe_img = AutoPipelineForText2Image.from_pretrained("stabilityai/sdxl-turbo", torch_dtype=torch.float16, variant="fp16").to(device)
+pipe_vid = StableVideoDiffusionPipeline.from_pretrained("stabilityai/stable-video-diffusion-img2vid-xt", torch_dtype=torch.float16, variant="fp16").to(device)
 
-print("🎬 Cargando SVD XT (Versión 25 frames)...")
-pipe_vid = StableVideoDiffusionPipeline.from_pretrained(
-    "stabilityai/stable-video-diffusion-img2vid-xt", torch_dtype=torch.float16, variant="fp16"
-).to(device)
-
-# Optimizaciones de memoria indispensables para 25 frames
+# Optimizaciones de memoria para 25 frames
 pipe_vid.enable_model_cpu_offload()
-try:
-    pipe_vid.vae.enable_slicing()
-    pipe_vid.unet.enable_forward_chunking(chunk_size=1, dim=1)
-except:
-    pass
+pipe_vid.vae.enable_slicing()
 
-def pipeline_vcpi_pro(prompt_usuario):
+def generar_produccion_pro(prompt_usuario):
     base_dir = os.getcwd()
-    video_out = os.path.join(base_dir, "VCPI_Coherente.mp4")
+    video_out = os.path.join(base_dir, "VCPI_Final_5s.mp4")
     
-    # 1. Ollama: Forzamos descripción anatómica completa
-    try:
-        query = f"Director mode: Create a high-detail prompt for: {prompt_usuario}. Mention full body, clear hands, and stable lighting. 25 words max."
-        prompt_ai = subprocess.check_output(["ollama", "run", "llama3", query], timeout=30).decode('utf-8').strip()
-    except:
-        prompt_ai = f"Full body shot of {prompt_usuario}, highly detailed limbs, cinematic lighting, 8k."
+    # 1. Director IA (Llama3): Enfocado en anatomía
+    query = f"Act as a film director. Create a high-detail prompt for: {prompt_usuario}. Mention full body, clear anatomical details, stable limbs, and cinematic lighting. 25 words max."
+    prompt_ai = subprocess.check_output(["ollama", "run", "llama3", query]).decode('utf-8').strip()
 
-    # 2. Imagen Maestra (Base sólida = Extremidades correctas)
-    # Usamos más pasos (4) para que las manos y extremidades salgan bien definidas
-    image = pipe_img(prompt=prompt_ai, num_inference_steps=4, guidance_scale=1.0).images[0]
+    # 2. Imagen Base: Más pasos = mejores manos y pies
+    image = pipe_img(prompt=prompt_ai, num_inference_steps=4, guidance_scale=1.2).images[0]
     image = image.resize((512, 512))
-    image.save("base.png")
+    image.save("master.png")
 
-    # 3. Animación de 5 segundos (25 frames a 5 fps o interpolación)
-    # Aumentamos motion_bucket_id para que haya movimiento pero con coherencia
-    print("🎬 Generando 25 cuadros de alta coherencia...")
+    # 3. Video: 25 frames con baja fuerza de ruido para evitar deformaciones
+    print("🎬 Generando video de 5 segundos con coherencia...")
     frames = pipe_vid(
         image, 
         decode_chunk_size=2, 
-        num_frames=25, # Máximo del modelo para duración
-        motion_bucket_id=100, # Menos distorsión en extremidades
-        noise_aug_strength=0.1 # Más fidelidad a la imagen original
+        num_frames=25, 
+        motion_bucket_id=80,      # Movimiento controlado para no romper extremidades
+        noise_aug_strength=0.08   # Mantiene la fidelidad a la imagen original
     ).frames[0]
     
     frame_dir = "temp_frames"
@@ -62,26 +45,24 @@ def pipeline_vcpi_pro(prompt_usuario):
     voz_path = "voz.mp3"
     subprocess.run(["edge-tts", "--text", prompt_ai[:150], "--write-media", voz_path, "--voice", "es-MX-DaliaNeural"])
 
-    # 5. FFMPEG: Ajustamos a 5 fps para dar 5 segundos de video real
-    # O podemos usar 'minterpolate' para suavizar a 24fps
-    print("🎥 Ensamblando video de larga duración...")
+    # 5. FFMPEG: 5 fps = 5 segundos exactos (25 frames / 5 fps)
     subprocess.run(
-        f"ffmpeg -framerate 5 -i {frame_dir}/%03d.png -i {voz_path} -c:v libx264 -pix_fmt yuv420p -vf 'scale=trunc(iw/2)*2:trunc(ih/2)*2' -shortest {video_out} -y",
+        f"ffmpeg -framerate 5 -i {frame_dir}/%03d.png -i {voz_path} -c:v libx264 -pix_fmt yuv420p -shortest {video_out} -y",
         shell=True, capture_output=True
     )
     
     return prompt_ai, video_out
 
-# Interfaz
-with gr.Blocks() as demo:
-    gr.Markdown("# 🌌 VCPI v7.0 - Coherencia Anatómica y 5 Segundos")
+# Interfaz Gradio
+with gr.Blocks(theme=gr.themes.Soft()) as demo:
+    gr.Markdown("# 🌌 VCPI v7.0: Coherencia y Producción 5s")
     with gr.Row():
-        in_t = gr.Textbox(label="Describe la escena (Ej: Científico trabajando de cuerpo completo)")
-        btn = gr.Button("GENERAR VIDEO LARGO", variant="primary")
+        idea = gr.Textbox(label="Instrucción (Ej: Astronauta caminando en Marte de cuerpo completo)")
+        btn = gr.Button("GENERAR VIDEO 5S", variant="primary")
     with gr.Row():
         out_p = gr.Textbox(label="Prompt Técnico")
-        out_v = gr.Video(label="Resultado 5s")
+        out_v = gr.Video(label="Producción Final")
     
-    btn.click(pipeline_vcpi_pro, inputs=[in_t], outputs=[out_p, out_v])
+    btn.click(generar_produccion_pro, inputs=[idea], outputs=[out_p, out_v])
 
 demo.launch(share=True)
