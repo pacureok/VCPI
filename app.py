@@ -6,98 +6,61 @@ import gc
 import numpy as np
 import soundfile as sf
 from audiocraft.models import musicgen
-from motor_vcpi import MotorVCPI  # Importa tu clase de Panda3D
+from motor_vcpi import MotorVCPI 
 
-# --- LIMPIEZA INICIAL DE MEMORIA ---
-def clear_vram():
+# --- LIMPIEZA ---
+def clear_mem():
     gc.collect()
     torch.cuda.empty_cache()
 
-# --- INICIALIZACIÓN ---
-print("🚀 Iniciando Cerebro Multimedia de Pacure AI Labs...")
-clear_vram()
-
+# --- CARGA DE MODELOS ---
+print("🚀 VCPI: Cargando motores...")
+clear_mem()
 try:
-    # Usamos musicgen-melody para seguir la identidad sonora
-    music_model = musicgen.MusicGen.get_pretrained('facebook/musicgen-melody', device='cuda')
+    # Usamos la versión 'small' si la memoria falla, pero 'melody' es mejor
+    music_model = musicgen.MusicGen.get_pretrained('facebook/musicgen-small', device='cuda')
     motor = MotorVCPI()
-    print("✅ Modelos cargados con éxito.")
 except Exception as e:
-    print(f"⚠️ Error en inicialización: {e}")
+    print(f"Error: {e}")
     motor = None
 
-def pipeline_maestro(prompt, duracion_seg):
-    clear_vram()
+def pipeline_vcpi(prompt, duracion):
+    clear_mem()
     
-    # 1. OLLAMA: Generación de Guion (Identidad de IA)
-    print("🧠 Ollama: Redactando guion...")
-    # Comando blindado para evitar errores de caracteres
-    guion_cmd = f"ollama run llama3 'Escribe una frase epica y corta de exploracion para: {prompt}'"
-    guion = subprocess.getoutput(guion_cmd)
+    # 1. Guion (Ollama)
+    guion = subprocess.getoutput(f"ollama run llama3 'Frase corta de terror liminal: {prompt}'")
 
-    # 2. MUSICGEN: Composición de 3 Minutos (Backrooms/Cinematic)
-    print(f"🎵 MusicGen: Generando {duracion_seg}s de audio...")
-    music_model.set_generation_params(duration=int(duracion_seg), cfg_coef=6.0)
-    
-    # Prompt enriquecido para la identidad musical
-    music_prompt = f"Backrooms, liminal space, {prompt}, haunting dark ambient, 60bpm, high fidelity."
-    res = music_model.generate([music_prompt], progress=True)
-    
-    audio_wav = "banda_sonora.wav"
-    audio_data = res.cpu().numpy()[0, 0] # Extraer el audio correctamente
-    sf.write(audio_wav, audio_data, 32000)
+    # 2. Música (MusicGen)
+    music_model.set_generation_params(duration=int(duracion))
+    res = music_model.generate([f"Dark ambient, backrooms, {prompt}"], progress=True)
+    audio_data = res.cpu().numpy()[0, 0]
+    sf.write("audio.wav", audio_data, 32000)
 
-    # 3. EDGE-TTS: Voz Narrativa
-    print("🎙️ TTS: Generando locución...")
-    voz_mp3 = "narracion.mp3"
-    texto_voz = guion.replace('"', '').replace('\n', ' ')[:500]
-    os.system(f'edge-tts --text "{texto_voz}" --write-media {voz_mp3} --voice es-MX-DaliaNeural')
+    # 3. Voz (TTS)
+    os.system(f'edge-tts --text "{guion}" --write-media voz.mp3 --voice es-MX-DaliaNeural')
 
-    # 4. MOTOR 3D: Renderizado de Escena
-    print("🎥 Motor 3D: Capturando render...")
-    render_img = "fallback.png"
-    if motor:
-        try:
-            render_img = motor.crear_escena(niebla_densidad=0.15)
-        except Exception as e:
-            print(f"Error en render: {e}")
+    # 4. 3D Render
+    img_render = motor.crear_escena() if motor else "fallback.png"
 
-    # 5. FFMPEG: Creación del Video Final MP4
-    print("🎬 FFMPEG: Ensamblando película final...")
-    video_final = "VCPI_Movie_Final.mp4"
-    # El comando mezcla la imagen, la música de fondo y la voz
-    ffmpeg_cmd = (
-        f'ffmpeg -loop 1 -i {render_img} -i {audio_wav} -i {voz_mp3} '
-        f'-filter_complex "[1:a][2:a]amix=inputs=2:duration=first[aout]" '
-        f'-map 0:v -map "[aout]" -c:v libx264 -t {duracion_seg} -pix_fmt yuv420p {video_final} -y'
-    )
-    subprocess.run(ffmpeg_cmd, shell=True)
+    # 5. Video Final (FFMPEG)
+    video_out = "VCPI_Final.mp4"
+    os.system(f'ffmpeg -loop 1 -i {img_render} -i audio.wav -i voz.mp3 -filter_complex "[1:a][2:a]amix=inputs=2:duration=first" -c:v libx264 -t {duracion} -pix_fmt yuv420p {video_out} -y')
 
-    return guion, video_final, audio_wav
+    return guion, video_out, "audio.wav"
 
-# --- INTERFAZ DE GRADIO (PÁGINA WEB) ---
-with gr.Blocks(theme=gr.themes.Soft()) as demo:
-    gr.Markdown("# 🌌 VCPI - Hub Multimedia Autónomo")
-    gr.Markdown("Control de Guion, Música (3 min), Render 3D y Voces.")
-    
+# --- INTERFAZ ---
+with gr.Blocks() as demo:
+    gr.Markdown("# 🌌 VCPI Multimedia Hub")
     with gr.Row():
         with gr.Column():
-            entrada_idea = gr.Textbox(label="Instrucción a la IA", placeholder="Un monolito brillante en el vacío...")
-            slider_tiempo = gr.Slider(minimum=10, maximum=180, value=30, step=1, label="Duración (Segundos)")
-            btn_generar = gr.Button("🚀 GENERAR UNIVERSO", variant="primary")
-            
+            idea = gr.Textbox(label="Idea")
+            tiempo = gr.Slider(10, 180, value=30, label="Segundos")
+            btn = gr.Button("GENERAR")
         with gr.Column():
-            salida_guion = gr.Textbox(label="📜 Guion de Llama 3")
-            salida_video = gr.Video(label="📽️ Película Renderizada (MP4)")
-            salida_audio = gr.Audio(label="🎵 Banda Sonora (WAV)")
+            txt = gr.Textbox(label="Guion")
+            vid = gr.Video(label="Video MP4")
+            aud = gr.Audio(label="Banda Sonora")
 
-    # Conexión de inputs a outputs
-    btn_generar.click(
-        fn=pipeline_maestro,
-        inputs=[entrada_idea, slider_tiempo],
-        outputs=[salida_guion, salida_video, salida_audio]
-    )
+    btn.click(pipeline_vcpi, [idea, tiempo], [txt, vid, aud])
 
-if __name__ == "__main__":
-    # share=True permite abrir la web desde fuera de Kaggle
-    demo.launch(share=True)
+demo.launch(share=True)
