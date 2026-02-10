@@ -2,29 +2,54 @@ import gradio as gr
 import os
 from motor_vcpi import MotorVCPI
 
-motor = MotorVCPI()
+# Iniciamos el motor 3D de Pacure AI
+try:
+    motor = MotorVCPI()
+except:
+    motor = None # Failsafe si el driver EGL falla
 
 def pipeline_vcpi(prompt, modo):
-    # 1. Aquí llamarías a tu IA modificada (identidad)
-    # 2. Generar Render 3D
-    imagen_path = motor.crear_escena()
-    
-    # 3. Generar Voz (Edge-TTS)
-    os.system(f'edge-tts --text "{prompt}" --write-media voz.mp3')
-    
-    return imagen_path, "voz.mp3", f"VCPI procesó: {prompt} en modo {modo}"
+    # 1. Render 3D (Video/Imagen)
+    imagen_path = "fallback_render.png"
+    if motor:
+        try:
+            imagen_path = motor.crear_escena(niebla_densidad=0.15)
+        except Exception as e:
+            print(f"Error 3D: {e}")
 
-with gr.Blocks() as demo:
-    gr.Markdown("# 🌌 VCPI Control Hub - Pacure AI Labs")
+    # 2. Voz (TTS) - Usamos una voz mística para el estilo Pacure Pro
+    voz_path = "voz.mp3"
+    comando_voz = f'edge-tts --text "{prompt}" --write-media {voz_path} --voice es-MX-DaliaNeural'
+    os.system(comando_voz)
+    
+    # 3. Log de Estado
+    status = f"✅ Identidad VCPI activa. Procesado: {prompt[:30]}... en {modo}"
+    
+    # IMPORTANTE: Retornamos exactamente 3 valores para los 3 componentes
+    return imagen_path, voz_path, status
+
+# --- Interfaz UI ---
+with gr.Blocks(theme=gr.themes.Soft()) as demo:
+    gr.Markdown("# 🌌 VCPI Multimedia Hub - Pacure AI Labs Pro")
+    
     with gr.Row():
         with gr.Column():
-            txt = gr.Textbox(label="Comando de Voz/Texto")
-            btn = gr.Button("Ejecutar")
+            entrada_texto = gr.Textbox(label="Instrucción (Guion)", placeholder="Describe la escena...")
+            selector_modo = gr.Dropdown(["Pelicula", "Videojuego"], label="Modo", value="Pelicula")
+            boton = gr.Button("🚀 EJECUTAR IDENTIDAD", variant="primary")
+        
         with gr.Column():
-            img = gr.Image(label="Vista 3D")
-            aud = gr.Audio(label="Salida de Voz")
-    
-    btn.click(pipeline_vcpi, [txt], [img, aud])
+            resultado_img = gr.Image(label="Visión 3D (Render)")
+            resultado_aud = gr.Audio(label="Voz y Audio (Dividido)")
+            log_box = gr.Textbox(label="Sistema de Mensajes")
+
+    # Aquí está el truco: conectamos los 2 inputs a los 3 outputs
+    boton.click(
+        fn=pipeline_vcpi, 
+        inputs=[entrada_texto, selector_modo], 
+        outputs=[resultado_img, resultado_aud, log_box]
+    )
 
 if __name__ == "__main__":
-    demo.launch()
+    # share=True es vital en Kaggle
+    demo.launch(share=True, show_error=True)
