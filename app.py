@@ -1,57 +1,73 @@
 import gradio as gr
-import os, subprocess, time, torch, shutil
+import os, subprocess, torch, shutil
 from diffusers import StableVideoDiffusionPipeline, AutoPipelineForText2Image
 
-# Configuración Dual-GPU balanceada
-device_img = "cuda:0"
-device_vid = "cuda:1"
+# Configuración Dual-GPU
+device_0 = "cuda:0"
+device_1 = "cuda:1"
 
-# Carga de modelos
-pipe_img = AutoPipelineForText2Image.from_pretrained("stabilityai/sdxl-turbo", torch_dtype=torch.float16, variant="fp16").to(device_img)
-pipe_vid = StableVideoDiffusionPipeline.from_pretrained("stabilityai/stable-video-diffusion-img2vid-xt", torch_dtype=torch.float16, variant="fp16").to(device_vid)
+# Carga simplificada para evitar errores de módulos secundarios
+print("🎨 Cargando Generador de Imagen (GPU 0)...")
+pipe_img = AutoPipelineForText2Image.from_pretrained(
+    "stabilityai/sdxl-turbo", 
+    torch_dtype=torch.float16, 
+    variant="fp16"
+).to(device_0)
 
-# Balanceo: GPU 0 ayuda con el VAE
-pipe_vid.vae.to(device_img)
-pipe_vid.enable_sequential_cpu_offload(device=device_vid)
+print("🎬 Cargando Generador de Video (GPU 1)...")
+pipe_vid = StableVideoDiffusionPipeline.from_pretrained(
+    "stabilityai/stable-video-diffusion-img2vid-xt", 
+    torch_dtype=torch.float16, 
+    variant="fp16"
+).to(device_1)
 
-def generar_solo_mp4(prompt_usuario):
-    # Rutas fijas y absolutas
-    video_path = "/kaggle/working/produccion_final.mp4"
-    frame_dir = "/kaggle/working/frames_temp"
+# Balanceo: El VAE vive en la GPU 0 para apoyar a la 1
+pipe_vid.vae.to(device_0)
+pipe_vid.enable_sequential_cpu_offload(device=device_1)
+
+def generar_mp4_seguro(prompt_usuario):
+    # Rutas absolutas
+    out_mp4 = "/kaggle/working/produccion_final.mp4"
+    tmp_frames = "/kaggle/working/frames_temp"
     
-    if os.path.exists(frame_dir): shutil.rmtree(frame_dir)
-    os.makedirs(frame_dir, exist_ok=True)
+    if os.path.exists(tmp_frames): shutil.rmtree(tmp_frames)
+    os.makedirs(tmp_frames, exist_ok=True)
 
-    # 1. Imagen (GPU 0)
-    image = pipe_img(prompt=prompt_usuario, num_inference_steps=4).images[0].resize((512, 512))
+    # 1. Imagen base
+    image = pipe_img(prompt=prompt_usuario, num_inference_steps=2).images[0].resize((512, 512))
     
-    # 2. Video (GPU 1 + GPU 0)
-    # decode_chunk_size=1 es vital para que no explote la memoria
-    output = pipe_vid(image, num_frames=25, motion_bucket_id=70, noise_aug_strength=0.04, decode_chunk_size=1)
+    # 2. Video de 5 segundos (25 frames)
+    # decode_chunk_size=1 evita que la memoria colapse al final
+    print("🎬 Generando frames...")
+    output = pipe_vid(
+        image, 
+        num_frames=25, 
+        motion_bucket_id=70, 
+        noise_aug_strength=0.04, 
+        decode_chunk_size=1
+    )
     
-    # 3. Guardar frames rápido
+    # 3. Guardar frames
     for i, frame in enumerate(output.frames[0]):
-        frame.save(f"{frame_dir}/{i:03d}.png")
+        frame.save(f"{tmp_frames}/{i:03d}.png")
 
-    # 4. FFMPEG Directo (Sin audio para velocidad máxima y evitar errores de codec)
-    # 5fps = 5 segundos exactos
+    # 4. FFMPEG Ultra-rápido (Solo video)
+    # Usamos -y para sobrescribir y faststart para que Gradio lo lea rápido
     subprocess.run(
-        f"ffmpeg -framerate 5 -i {frame_dir}/%03d.png -c:v libx264 -pix_fmt yuv420p -movflags +faststart {video_path} -y",
+        f"ffmpeg -framerate 5 -i {tmp_frames}/%03d.png -c:v libx264 -pix_fmt yuv420p -movflags +faststart {out_mp4} -y",
         shell=True, capture_output=True
     )
     
-    return video_path
+    return out_mp4
 
-# Interfaz minimalista
+# Interfaz
 with gr.Blocks() as demo:
-    gr.Markdown("# 🚀 VCPI - Generador MP4 Directo")
+    gr.Markdown("# 🚀 VCPI MP4 - Dual GPU Balance")
     with gr.Row():
-        input_txt = gr.Textbox(label="Instrucción")
-        btn = gr.Button("GENERAR MP4")
+        txt = gr.Textbox(label="Instrucción (Ej: Astronauta en Marte)")
+        btn = gr.Button("GENERAR VIDEO")
     
-    # El componente Video de Gradio recibirá la ruta y la cargará
-    output_video = gr.Video(label="Resultado MP4")
+    out_video = gr.Video(label="Resultado Final")
+    btn.click(generar_mp4_seguro, inputs=[txt], outputs=[out_video])
 
-    btn.click(generar_solo_mp4, inputs=[input_txt], outputs=[output_video])
-
-demo.launch(share=True, show_error=True)
+demo.launch(share=True)
